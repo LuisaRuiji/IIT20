@@ -516,7 +516,7 @@ except Exception as exc:
     st.stop()
 
 try:
-    demo_presets = build_demo_presets(tuple(feature_columns))
+    demo_presets = build_demo_presets()
 except Exception as exc:
     demo_presets = None
     st.warning(f"Could not load demo presets from the training dataset: {exc}")
