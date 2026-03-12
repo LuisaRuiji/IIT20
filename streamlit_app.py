@@ -11,10 +11,8 @@ PIPELINE_PATH = "preprocessing_pipeline.pkl"
 LOGISTIC_MODEL_PATH = "logistic_regression_model.pkl"
 GB_MODEL_PATH = "gradient_boosting_model.pkl"
 FEATURE_COLUMNS_PATH = "feature_columns.json"
+DEMO_PRESETS_PATH = "demo_presets.json"
 MISSING_VALUE = -1
-TRAINING_DATASET_PATH = (
-    r"c:\Users\luigi\source\repos\Ecommerce-web-app\exports\recommender-training-dataset-v2-2026-03-01.csv"
-)
 
 
 # Visible demo inputs grouped by signal family.
@@ -168,74 +166,23 @@ def load_feature_columns():
 
 
 @st.cache_data
-def load_training_dataset():
-    # Read the training dataset once for demo presets sourced from real rows.
-    return pd.read_csv(TRAINING_DATASET_PATH)
+def load_demo_metadata():
+    # Load precomputed preset rows and helper ranges bundled with the app.
+    with open(DEMO_PRESETS_PATH, "r", encoding="utf-8") as file:
+        return json.load(file)
 
 
 @st.cache_data
-def build_demo_presets(feature_columns):
-    # Score real dataset rows and keep a small preset table for the demo UI.
-    dataset = load_training_dataset()
-    gb_model = joblib.load(GB_MODEL_PATH)
-
-    eligible = dataset.copy()
-    for field in VISIBLE_INPUT_FIELDS:
-        if field == "categoryId":
-            continue
-        eligible = eligible[eligible[field] >= 0]
-
-    if eligible.empty:
-        raise ValueError("No dataset rows are compatible with the visible demo inputs.")
-
-    probabilities = gb_model.predict_proba(eligible[list(feature_columns)])[:, 1]
-    scored = eligible[
-        ["userId", "productId", "referenceTimeUtc", "willPurchase"] + VISIBLE_INPUT_FIELDS
-    ].copy()
-    scored["gb_probability"] = probabilities
-
-    high_row = scored[scored["willPurchase"] == 1].sort_values(
-        "gb_probability", ascending=False
-    ).iloc[0]
-    low_row = scored[scored["willPurchase"] == 0].sort_values("gb_probability").iloc[0]
-
-    used_indices = {high_row.name, low_row.name}
-    borderline_candidates = scored.loc[~scored.index.isin(used_indices)].copy()
-    borderline_row = borderline_candidates.iloc[
-        (borderline_candidates["gb_probability"] - 0.5).abs().argmin()
-    ]
-
-    presets = pd.DataFrame(
-        [
-            {"preset_label": "High Purchase Likelihood", **high_row.to_dict()},
-            {"preset_label": "Low Purchase Likelihood", **low_row.to_dict()},
-            {"preset_label": "Borderline", **borderline_row.to_dict()},
-        ]
-    )
-
-    return presets
+def build_demo_presets():
+    metadata = load_demo_metadata()
+    return pd.DataFrame(metadata["presets"])
 
 
 @st.cache_data
 def load_helper_ranges():
-    # Summarize a few key visible fields so the UI can show training-aligned guidance.
-    dataset = load_training_dataset()
-    helper_ranges = {}
-
-    for field in HELPER_RANGE_FIELDS:
-        series = dataset[field]
-        if field == "lifetime_total_spend":
-            series = series[series >= 0]
-
-        quantiles = series.quantile([0.25, 0.5, 0.75, 0.95])
-        helper_ranges[field] = {
-            "q25": float(quantiles.loc[0.25]),
-            "q50": float(quantiles.loc[0.5]),
-            "q75": float(quantiles.loc[0.75]),
-            "q95": float(quantiles.loc[0.95]),
-        }
-
-    return helper_ranges
+    # Read precomputed training-range guidance bundled with the app.
+    metadata = load_demo_metadata()
+    return metadata["helper_ranges"]
 
 
 def format_range_value(field_name, value):
