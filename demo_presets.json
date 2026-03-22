@@ -23,17 +23,14 @@
       "product_purchase_count_7d": 27,
       "hours_since_last_user_event": 4,
       "hours_since_last_user_product_event": 11,
-      "days_since_last_purchase": 0,
-      "account_age_days": 0,
-      "lifetime_order_count": 1,
-      "lifetime_total_spend": 68.94,
+      "days_since_product_added": 14,
       "distinct_products_viewed_7d": 39,
       "distinct_products_carted_7d": 22,
       "user_category_view_count_30d": 37,
       "price": 12.99,
       "currentStock": 5,
       "categoryId": 1,
-      "gb_probability": 0.9670129587628743
+      "gb_probability": 0.000705809351469476
     },
     {
       "preset_label": "Low Purchase Likelihood",
@@ -58,17 +55,14 @@
       "product_purchase_count_7d": 0,
       "hours_since_last_user_event": 2,
       "hours_since_last_user_product_event": 2,
-      "days_since_last_purchase": 14,
-      "account_age_days": 15,
-      "lifetime_order_count": 5,
-      "lifetime_total_spend": 78.96,
+      "days_since_product_added": 120,
       "distinct_products_viewed_7d": 47,
       "distinct_products_carted_7d": 19,
       "user_category_view_count_30d": 5,
       "price": 407.0,
       "currentStock": 90,
       "categoryId": 24,
-      "gb_probability": 1.5999734694560886e-10
+      "gb_probability": 0.0001863538831297136
     },
     {
       "preset_label": "Borderline",
@@ -93,17 +87,14 @@
       "product_purchase_count_7d": 0,
       "hours_since_last_user_event": 3,
       "hours_since_last_user_product_event": 123,
-      "days_since_last_purchase": 0,
-      "account_age_days": 0,
-      "lifetime_order_count": 2,
-      "lifetime_total_spend": 75.93,
+      "days_since_product_added": 45,
       "distinct_products_viewed_7d": 46,
       "distinct_products_carted_7d": 26,
       "user_category_view_count_30d": 156,
       "price": 12.0,
       "currentStock": 10,
       "categoryId": 2,
-      "gb_probability": 0.4975758681273012
+      "gb_probability": 0.000296079930560325
     }
   ],
   "helper_ranges": {
@@ -143,17 +134,11 @@
       "q75": 4.0,
       "q95": 73.0
     },
-    "lifetime_order_count": {
-      "q25": 2.0,
-      "q50": 3.0,
-      "q75": 4.0,
-      "q95": 6.0
-    },
-    "lifetime_total_spend": {
-      "q25": 39.96,
-      "q50": 72.99,
-      "q75": 106.98,
-      "q95": 186.93
+    "days_since_product_added": {
+      "q25": 7.0,
+      "q50": 30.0,
+      "q75": 90.0,
+      "q95": 180.0
     }
   }
 }

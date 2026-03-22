@@ -8,8 +8,7 @@ import streamlit as st
 
 # Fixed artifact names based on the current project files.
 PIPELINE_PATH = "preprocessing_pipeline.pkl"
-LOGISTIC_MODEL_PATH = "logistic_regression_model.pkl"
-GB_MODEL_PATH = "gradient_boosting_model.pkl"
+FINAL_GB_MODEL_PATH = "deployed_bias_reduced_gb_model.pkl"
 FEATURE_COLUMNS_PATH = "feature_columns.json"
 DEMO_PRESETS_PATH = "demo_presets.json"
 MISSING_VALUE = -1
@@ -52,15 +51,7 @@ FORM_SECTIONS = [
         [
             "hours_since_last_user_event",
             "hours_since_last_user_product_event",
-            "days_since_last_purchase",
-        ],
-    ),
-    (
-        "Customer Profile",
-        [
-            "account_age_days",
-            "lifetime_order_count",
-            "lifetime_total_spend",
+            "days_since_product_added",
         ],
     ),
     (
@@ -99,10 +90,7 @@ DEFAULT_INPUT_VALUES = {
     "product_purchase_count_7d": 2,
     "hours_since_last_user_event": 12.0,
     "hours_since_last_user_product_event": 6.0,
-    "days_since_last_purchase": 14,
-    "account_age_days": 365,
-    "lifetime_order_count": 5,
-    "lifetime_total_spend": 350.0,
+    "days_since_product_added": 30,
     "distinct_products_viewed_7d": 8,
     "distinct_products_carted_7d": 2,
     "user_category_view_count_30d": 10,
@@ -113,7 +101,6 @@ DEFAULT_INPUT_VALUES = {
 FLOAT_FIELDS = {
     "hours_since_last_user_event",
     "hours_since_last_user_product_event",
-    "lifetime_total_spend",
     "price",
 }
 
@@ -126,8 +113,7 @@ HELPER_RANGE_FIELDS = [
     "product_view_count_30d",
     "product_cart_count_30d",
     "hours_since_last_user_event",
-    "lifetime_order_count",
-    "lifetime_total_spend",
+    "days_since_product_added",
 ]
 
 
@@ -135,10 +121,9 @@ HELPER_RANGE_FIELDS = [
 def load_artifacts():
     # Load the saved files once so Streamlit does not reload them on every interaction.
     pipeline = load_optional_pipeline()
-    logistic_model = joblib.load(LOGISTIC_MODEL_PATH)
-    gb_model = joblib.load(GB_MODEL_PATH)
-    feature_columns = load_feature_columns()
-    return pipeline, logistic_model, gb_model, feature_columns
+    final_gb_model = joblib.load(FINAL_GB_MODEL_PATH)
+    feature_columns = load_feature_columns(final_gb_model)
+    return pipeline, final_gb_model, feature_columns
 
 
 def load_optional_pipeline():
@@ -149,8 +134,14 @@ def load_optional_pipeline():
         return None
 
 
-def load_feature_columns():
-    # Read the full feature list from JSON.
+def load_feature_columns(model):
+    # Prefer the deployed model's embedded training columns so the demo stays aligned
+    # with the final selected model even if sidecar metadata files are stale.
+    embedded_columns = getattr(model, "feature_names_in_", None)
+    if embedded_columns is not None:
+        return list(embedded_columns)
+
+    # Fall back to JSON metadata if embedded columns are unavailable.
     with open(FEATURE_COLUMNS_PATH, "r", encoding="utf-8") as file:
         data = json.load(file)
 
@@ -246,8 +237,10 @@ def get_model_categorical_info(model):
 
 
 def model_has_embedded_preprocessing(model):
-    # The current saved models are sklearn Pipelines with a fitted "prep" step.
-    return hasattr(model, "named_steps") and "prep" in model.named_steps
+    # The saved sklearn Pipelines may expose either "prep" or "preprocessor".
+    return hasattr(model, "named_steps") and (
+        "prep" in model.named_steps or "preprocessor" in model.named_steps
+    )
 
 
 def safe_rate(numerator, denominator):
@@ -400,7 +393,6 @@ def add_derived_features(values):
     values["isActive"] = 1
     values["price_is_missing"] = 1 if values["price"] <= 0 else 0
     values["price_bucket"] = get_price_bucket(values["price"])
-    values["is_returning_customer"] = 1 if values["lifetime_order_count"] > 1 else 0
     values["has_user_product_event_30d"] = 1 if (
         values["user_product_view_count_30d"] > 0
         or values["user_product_cart_count_30d"] > 0
@@ -489,8 +481,19 @@ def build_input_frame(
     # with the exact base features being sent to the model.
     row = add_derived_features(row)
 
-    # Create a single-row DataFrame with the exact feature order used in training.
+    # Create a single-row DataFrame with the exact feature order used by the final model.
     return pd.DataFrame([row], columns=feature_columns)
+
+
+def get_recommendation_strength(probability, high_threshold):
+    # Use demo-friendly score bands so strength labels stay meaningful even when
+    # calibrated purchase probabilities are very small.
+    medium_threshold = 0.0002
+    if probability >= high_threshold:
+        return "High"
+    if probability >= medium_threshold:
+        return "Medium"
+    return "Low"
 
 
 def get_positive_probability(model, transformed_data):
@@ -502,15 +505,15 @@ def get_positive_probability(model, transformed_data):
     return float(model.predict(transformed_data)[0])
 
 
-st.set_page_config(page_title="Purchase Likelihood Demo")
-st.title("Purchase Likelihood Demo")
+st.set_page_config(page_title="Final Purchase-Likelihood Scoring Demo")
+st.title("Final Purchase-Likelihood Scoring Demo")
 st.write(
-    "This demo estimates how likely a customer is to purchase a product. "
-    "It is intended for model demonstration only."
+    "This demo presents the final refined purchase-likelihood scoring model "
+    "used to rank products for recommendation."
 )
 
 try:
-    pipeline, logistic_model, gb_model, feature_columns = load_artifacts()
+    pipeline, final_gb_model, feature_columns = load_artifacts()
 except Exception as exc:
     st.error(f"Could not load model files: {exc}")
     st.stop()
@@ -521,7 +524,7 @@ except Exception as exc:
     demo_presets = None
     st.warning(f"Could not load demo presets from the training dataset: {exc}")
 
-categorical_defaults, categorical_options = get_model_categorical_info(logistic_model)
+categorical_defaults, categorical_options = get_model_categorical_info(final_gb_model)
 helper_ranges = load_helper_ranges()
 initialize_form_state(categorical_defaults)
 
@@ -531,17 +534,16 @@ if pipeline is None:
         "The saved model files already include preprocessing, so the app will use them directly."
     )
 
-st.subheader("Enter Sample Feature Values")
+st.subheader("Enter Sample Signals")
 st.caption(
-    "Models loaded:\n"
-    "- Logistic Regression baseline\n"
-    "- Final Gradient Boosting deployment model"
+    "Final refined model:\n"
+    "- Gradient Boosting purchase-likelihood scoring model"
 )
 st.caption(
-    "These presets come from real dataset rows so the demo stays aligned with the model's "
-    "training distribution."
+    "These presets are based on real dataset rows so the demo stays aligned with the final "
+    "model's training patterns."
 )
-st.caption("Derived flags and rate features are calculated automatically from the visible inputs.")
+st.caption("Derived behavioral and funnel signals are calculated automatically from the visible inputs.")
 
 if demo_presets is not None:
     st.markdown("**Demo Presets**")
@@ -555,8 +557,8 @@ if demo_presets is not None:
     if selected_preset_label:
         st.info(
             f"Loaded preset: {selected_preset_label} | "
-            f"Actual willPurchase: {st.session_state.get('selected_preset_target')} | "
-            f"GB score on sampled row: {format_probability(st.session_state.get('selected_preset_probability', 0.0))}"
+            f"Observed outcome: {st.session_state.get('selected_preset_target')} | "
+            f"Final model score on sampled row: {format_probability(st.session_state.get('selected_preset_probability', 0.0))}"
         )
         st.caption(st.session_state.get("selected_preset_reference", ""))
 
@@ -577,25 +579,34 @@ for section_title, fields in FORM_SECTIONS:
                 feature_name, categorical_defaults, categorical_options, helper_ranges
             )
 
-with st.expander("Demo Controls"):
-    randomize_hidden = st.checkbox("Randomize hidden features", value=False)
+with st.expander("Scoring Controls"):
+    randomize_hidden = st.checkbox("Randomize hidden model features", value=False)
     random_seed = st.number_input("Random seed", min_value=0, value=42, step=1, format="%d")
-    prediction_threshold = st.slider(
-        "Prediction threshold", min_value=0.0, max_value=1.0, value=0.5, step=0.01
+    recommendation_threshold = st.slider(
+        "High-strength score band",
+        min_value=0.0002,
+        max_value=0.005,
+        value=0.00045,
+        step=0.0001,
+        format="%.4f",
+    )
+    st.caption(
+        "Recommendation Strength uses demo-friendly score bands. Medium begins at 0.0002, while "
+        "High uses the selected threshold."
     )
 
 if randomize_hidden:
     st.warning(
-        "Warning: Hidden features are being randomized for demonstration only. "
-        "Predictions may vary even with the same visible inputs."
+        "Presentation note: Hidden model features are being randomized for demonstration only. "
+        "Scores may vary even with the same visible inputs."
     )
 else:
     st.info(
-        "Info: Hidden features are filled with deterministic defaults for a stable demo. "
-        "In a production system, all features would come from the full data pipeline."
+        "Presentation note: Hidden model features are filled with deterministic defaults for a "
+        "stable demo. In production, all model signals would come from the data pipeline."
     )
 
-if st.button("Predict Purchase Likelihood"):
+if st.button("Generate Recommendation Score"):
     # Build a full feature row, filling unseen fields with zeros.
     input_df = build_input_frame(
         feature_columns,
@@ -607,7 +618,7 @@ if st.button("Predict Purchase Likelihood"):
     )
 
     # Avoid double preprocessing when the saved model already contains its own prep step.
-    if pipeline is not None and not model_has_embedded_preprocessing(logistic_model):
+    if pipeline is not None and not model_has_embedded_preprocessing(final_gb_model):
         transformed_df = pipeline.transform(input_df)
     else:
         transformed_df = input_df
@@ -615,9 +626,7 @@ if st.button("Predict Purchase Likelihood"):
     non_zero_feature_count = count_non_zero_features(input_df)
 
     try:
-        # Score both models.
-        logistic_probability = get_positive_probability(logistic_model, transformed_df)
-        gb_probability = get_positive_probability(gb_model, transformed_df)
+        gb_probability = get_positive_probability(final_gb_model, transformed_df)
     except Exception as exc:
         st.error(
             "Prediction failed. This usually means the saved models expect a separate "
@@ -625,11 +634,10 @@ if st.button("Predict Purchase Likelihood"):
         )
         st.stop()
 
-    # Use the GB score as the deployment decision; show the average only for comparison.
-    average_probability = (logistic_probability + gb_probability) / 2
-    final_prediction = (
-        "Likely Purchase" if gb_probability >= prediction_threshold else "Not Likely"
+    recommendation_strength = get_recommendation_strength(
+        gb_probability, recommendation_threshold
     )
+    print("Final model feature columns:", feature_columns)
 
     st.subheader("Scenario Summary")
     scenario_summary = pd.DataFrame(
@@ -642,6 +650,7 @@ if st.button("Predict Purchase Likelihood"):
                 "hours_since_last_user_product_event": user_inputs[
                     "hours_since_last_user_product_event"
                 ],
+                "days_since_product_added": user_inputs["days_since_product_added"],
                 "price": user_inputs["price"],
                 "currentStock": user_inputs["currentStock"],
             }
@@ -649,31 +658,27 @@ if st.button("Predict Purchase Likelihood"):
     )
     st.dataframe(scenario_summary, hide_index=True, width="stretch")
 
-    st.subheader("Prediction Results")
-    st.caption("Deployment decision uses the Final Gradient Boosting deployment model.")
-    st.write("Raw GB probability:", f"{gb_probability:.12e}")
-    st.write("Raw LR probability:", f"{logistic_probability:.12e}")
+    st.subheader("Scoring Results")
+    st.caption("Scoring uses the final refined purchase-likelihood model.")
+    st.write("Raw model score:", f"{gb_probability:.12e}")
     st.write("Non-zero feature count:", non_zero_feature_count)
-    primary_col, secondary_col = st.columns(2)
-    with primary_col:
-        st.metric("Gradient Boosting Deployment Probability", format_probability(gb_probability))
-        st.metric("Final Prediction (GB model)", final_prediction)
-    with secondary_col:
-        st.metric("Logistic Regression Baseline Probability", format_probability(logistic_probability))
-
-    st.caption("Comparison only")
-    st.metric("Average Probability (comparison only)", format_probability(average_probability))
+    score_col, strength_col = st.columns(2)
+    with score_col:
+        st.metric("Final Model Score", format_probability(gb_probability))
+    with strength_col:
+        st.metric("Recommendation Strength", recommendation_strength)
     st.caption(
-        "The model outputs a probability score between 0 and 1. Because purchase events are rare in "
-        "the training data, many predictions may appear as small percentages even when the model is "
-        "working correctly."
+        "This score is best used for recommendation ranking and strength, not as a yes-or-no "
+        "certainty."
     )
 
-    with st.expander("Show model input row"):
+    with st.expander("Show final model input signals"):
         st.dataframe(input_df)
+    with st.expander("Show final model feature columns"):
+        st.write(feature_columns)
 
-st.subheader("What this means")
+st.subheader("How to present it")
 st.write(
-    "The prediction gives an estimated purchase likelihood that can support "
-    "product recommendation demos or stakeholder presentations."
+    "Use the final model score to compare products and prioritize stronger recommendation "
+    "candidates in demos or presentations."
 )
